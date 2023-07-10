@@ -1,7 +1,5 @@
 ## Week 1
----
 ### Homework Part 1 (Docker & SQL)
----
 #### Question 1. Knowing docker tags
 Run the command to get information on Docker
 `docker --help`
