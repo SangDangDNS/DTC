@@ -14,7 +14,7 @@ $ docker build --help | grep "Write the image ID to the file"
 **Answer:** --iidfile string
 #### Question 2. Understanding docker first run
 Run docker with the python:3.9 image in an interactive mode and the entrypoint of bash. Now check the python modules that are installed ( use pip list). How many python packages/modules are installed?
-```
+```c
 $ sudo docker run -it python:3.9 pip list
 Package    Version
 ---------- -------
