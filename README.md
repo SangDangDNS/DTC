@@ -67,7 +67,7 @@ GROUP BY passenger_count
 ```
 **Answer:** 2: 1282 ; 3: 254
 #### Question 6. Largest tip
-For the passengers picked up in the Astoria Zone which was the drop off zone that had the largest tip? We want the name of the zone, not the id.
+For the passengers picked up in the Astoria Zone which was the drop off zone that had the largest tip? We want the name of the zone, not the id.  
 **Note:** it's not a typo, it's tip , not trip
 ```
 SELECT "Zone"
