@@ -66,9 +66,17 @@ Youtube.
 ### What is workflow orchestration?
 
 It means governing your data flow in a way that respects orchestration rules and your business logic.  
-So, what is the data flow? --> It is what bins and otherwise disparate set of application together. A data flow represents the movement of data from one component or system to another. The data flow may also be described as the transport of data from a source to a destination. An ETL (extract, transform, load) process is a type of data flow.
+So, what is the data flow? --> It is what bins and otherwise disparate set of application together. A data flow represents the movement of data from one component or system to another. The data flow may also be described as the transport of data from a source to a destination. An ETL (extract, transform, load) process is a type of data flow.  
+
+**Dataflow concept:**
+
+![Alt text](image-4.png)  
+
+**Workflow Orchestration concept:**
 
 ![Alt text](image-2.png)
+
+![Alt text](image-3.png)
 
 ### Core features of Workflow orchestration:
 
