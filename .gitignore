@@ -1,2 +1,5 @@
 2_Docker_Sql/ny_taxi_postgres_data/
 *.csv
+week_2/.idea/
+week_2/yellow_tripdata_2021-01.csv.gz
+week_2/ny_taxi_postgres_data/
