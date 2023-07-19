@@ -19,14 +19,14 @@ Below are my notes from week 2.
 
 See [DE Zoomcamp 2.1.1 - Data Lake](https://www.youtube.com/watch?v=W3Zm6rjOq70) on Youtube.  
 
-![Alt text](image.png)  
+![Alt text](imgs/image.png)  
 
 - It is a central repository that holds big data from many sources.  
 - Generally, the data can be structured, semi-structured or unstructured, so the ideal is to ingest data as quickly as possible and make it available or accessible to other team members like DS, DA, DE.  
 
 ### Data Lake vs Data Warehouse
 
-![Alt text](image-1.png)  
+![Alt text](imgs/image-1.png)  
 
 ### How did Data Lake start?  
 
@@ -70,13 +70,13 @@ So, what is the data flow? --> It is what bins and otherwise disparate set of ap
 
 **Dataflow concept:**
 
-![Alt text](image-4.png)  
+![Alt text](imgs/image-4.png)  
 
 **Workflow Orchestration concept:**
 
-![Alt text](image-2.png)
+![Alt text](imgs/image-2.png)
 
-![Alt text](image-3.png)
+![Alt text](imgs/image-3.png)
 
 ### Core features of Workflow orchestration:
 
@@ -310,7 +310,7 @@ See also https://prefecthq.github.io/prefect-sqlalchemy/
 
 But the instructor suggests instead to add the block **SQLAlchemy Connector** from the interface **Blocks** of Orion.  
 
-![img.png](img.png)  
+![img.png](imgs/img.png)  
 
 Write or select these parameters :
 
@@ -324,7 +324,7 @@ Write or select these parameters :
 - **Port**: 5432  
 
 Then click on the **Create** button  
-![img_1.png](img_1.png)  
+![img_1.png](imgs/img_1.png)  
 
 Then, I executed the python program.  
 
@@ -333,3 +333,6 @@ python ingest_data_flow.py
 ```
 
 Opne `pgcli` and run sql command to view result.
+
+### 2.4 ETL with GCP & Prefect   
+
