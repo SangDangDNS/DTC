@@ -509,3 +509,189 @@ dtype: object
 By checking on Google Cloud, we should see our bucket of 20.7 Mb. Congratulation!  
 
 ![img_3.png](imgs%2Fimg_3.png)
+
+
+### 2.5 From Google Cloud Storage to Big Query
+
+See [DE Zoomcamp 2.2.4 - From Google Cloud Storage to Big Query](https://www.youtube.com/watch?v=Cx5jt-V5sgE) on
+Youtube.
+
+Now let’s create another python program to load our data into the Google Cloud Storage (GCS) to Big Query.  
+
+File `etl_gcs_to_bq.py`
+
+```
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+@task(log_prints=True, retries=3)
+def extract_from_gcs(color: str, year: int, month: int) -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/{color}/{color}_tripdata_{year}-{month:02}.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path, local_path=f"../data/")
+    return Path(f"../data/{gcs_path}")
+
+@task(log_prints=True, retries=3)
+def transform(path: Path) -> pd.DataFrame:
+    """Data Cleaning"""
+    df = pd.read_parquet(path)
+    print(f"Pre: missing passenger count: {df['passenger_count'].isna().sum()}")
+    df['passenger_count'].fillna(0, inplace=True)
+    print(f"Post: missing passenger count: {df['passenger_count'].isna().sum()}")
+    return df
+
+
+@flow()
+def etl_gcs_to_bq():
+    """main ETL flow to load data into Big Query"""
+    color='yellow'
+    year=2021
+    month=1
+
+    path = extract_from_gcs(color,year,month)
+    df = transform(path)
+
+if __name__ == '__main__':
+    etl_gcs_to_bq()
+```
+
+Run that file by this command: `python flows/02_gcp/etl_gcs_to_bq.py`  
+
+We should have result like this:
+```
+09:47:46.019 | INFO    | Task run 'extract_from_gcs-968e3b65-0' - Finished in state Completed()
+09:47:46.043 | INFO    | Flow run 'zircon-goshawk' - Created task run 'transform-a7d916b4-0' for task 'transform'
+09:47:46.043 | INFO    | Flow run 'zircon-goshawk' - Executing 'transform-a7d916b4-0' immediately...
+09:47:46.215 | INFO    | Task run 'transform-a7d916b4-0' - Pre: missing passenger count: 98352
+09:47:46.223 | INFO    | Task run 'transform-a7d916b4-0' - Post: missing passenger count: 0
+09:47:46.247 | INFO    | Task run 'transform-a7d916b4-0' - Finished in state Completed()
+09:47:46.276 | INFO    | Flow run 'zircon-goshawk' - Finished in state Completed('All states completed.')
+```
+
+Go to **Google Cloud Console**, select **Big Query**, click on **+ ADD DATA** button.  
+
+The field **Create table from** should be set to **Google Cloud Storage**.
+
+On **Select the file from GCS bucket**, click on **BROWSE** and select the `.parquet` file.
+
+Under **Destination** section, click on **CREATE NEW DATASET** with the field **Dataset ID** equal to **dezoomcamp**.   
+Then click on CREATE DATASET button.  
+
+![img_4.png](imgs%2Fimg_4.png)  
+
+Still under **Destination** section, name the table **rides**.
+
+Then click on **CREATE TABLE** button.
+
+Select the table rides, open a new Query tab, and run this query:  
+```
+SELECT * FROM `dtc-392100.dezoomcamp.rides` LIMIT 1000
+```
+
+![img_5.png](imgs%2Fimg_5.png)  
+
+Now, run this query to remove all rows.
+
+```
+DELETE FROM `dtc-392100.dezoomcamp.rides` WHERE true;
+```
+
+You should see T**his statement removed 1,369,765 rows from rides**.  
+
+Back to our code, and add a function to write to BigQuery.  
+
+File `etl_gcs_to_bq.py`
+
+```
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+@task(log_prints=True, retries=3)
+def extract_from_gcs(color: str, year: int, month: int) -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/{color}/{color}_tripdata_{year}-{month:02}.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path, local_path=f"../data/")
+    return Path(f"../data/{gcs_path}")
+
+@task(log_prints=True, retries=3)
+def transform(path: Path) -> pd.DataFrame:
+    """Data Cleaning"""
+    df = pd.read_parquet(path)
+    print(f"Pre: missing passenger count: {df['passenger_count'].isna().sum()}")
+    df['passenger_count'].fillna(0, inplace=True)
+    print(f"Post: missing passenger count: {df['passenger_count'].isna().sum()}")
+    return df
+
+
+@task(log_prints=True, retries=3)
+def write_bq(df: pd.DataFrame) -> None:
+    """Write DataFrame to BigQuery"""
+
+    gcp_credentials_block = GcpCredentials.load("zoom-gcp-creds")
+    df.to_gbq(
+        destination_table="dezoomcamp.rides",
+        project_id="dtc-392100",
+        credentials=gcp_credentials_block.get_credentials_from_service_account(),
+        chunksize=500_000,
+        if_exists="append"
+    )
+
+@flow()
+def etl_gcs_to_bq():
+    """main ETL flow to load data into Big Query"""
+    color='yellow'
+    year=2021
+    month=1
+
+    path = extract_from_gcs(color,year,month)
+    df = transform(path)
+    write_bq(df)
+
+if __name__ == '__main__':
+    etl_gcs_to_bq()
+```
+
+See [prefect_gcp.credentials](https://prefecthq.github.io/prefect-gcp/credentials/) for more information about handling
+GCP credentials.
+
+See also [pandas.DataFrame.to_gbq](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_gbq.html) for more
+information about `.to_gbq` method.  
+
+Okay, let's run that program: `python flows/02_gcp/etl_gcs_to_bq.py`  
+
+We should see this result:
+
+```
+09:48:48.260 | INFO    | Task run 'extract_from_gcs-968e3b65-0' - Finished in state Completed()
+09:48:48.284 | INFO    | Flow run 'radical-porpoise' - Created task run 'transform-a7d916b4-0' for task 'transform'
+09:48:48.284 | INFO    | Flow run 'radical-porpoise' - Executing 'transform-a7d916b4-0' immediately...
+09:48:48.421 | INFO    | Task run 'transform-a7d916b4-0' - Pre: missing passenger count: 98352
+09:48:48.425 | INFO    | Task run 'transform-a7d916b4-0' - Post: missing passenger count: 0
+09:48:48.447 | INFO    | Task run 'transform-a7d916b4-0' - Finished in state Completed()
+09:48:48.468 | INFO    | Flow run 'radical-porpoise' - Created task run 'write_bq-b366772c-0' for task 'write_bq'
+09:48:48.469 | INFO    | Flow run 'radical-porpoise' - Executing 'write_bq-b366772c-0' immediately...
+09:49:04.306 | INFO    | Task run 'write_bq-b366772c-0' - Finished in state Completed()
+09:49:04.332 | INFO    | Flow run 'radical-porpoise' - Finished in state Completed('All states completed.')
+```
+
+Now, return to query interface on Google Cloud and run this query.
+
+``` sql
+SELECT count(1) FROM `dtc-392100.dezoomcamp.rides`;
+```
+
+This should return 1369765.
+
+Now, run this query to remove all rows.
+
+``` sql
+DELETE FROM `dtc-392100.dezoomcamp.rides` WHERE true;
+```
