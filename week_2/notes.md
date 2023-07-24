@@ -695,3 +695,329 @@ Now, run this query to remove all rows.
 ``` sql
 DELETE FROM `dtc-392100.dezoomcamp.rides` WHERE true;
 ```
+
+### 2.6 Parametrizing Flow & Deployments
+
+See [DE Zoomcamp 2.2.5 - Parametrizing Flow & Deployments with ETL into GCS
+flow](https://www.youtube.com/watch?v=QrDxPjX10iw) on Youtube.
+
+We will see in this section:
+
+- Parametrizing the script from your flow (rather then hard coded)
+- Parameter validation with Pydantic
+- Creating a deployment locally
+- Setting up Prefect Agent
+- Running the flow
+- Notifications  
+
+### Parametrizing the script from your flow
+
+Create a new file `parameterized_flow.py` with script parametrized.  
+
+**File `parameterized_flow.py`**
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect.tasks import task_input_hash
+from datetime import timedelta
+
+@task(log_prints=True, retries=3,cache_key_fn=task_input_hash, cache_expiration=timedelta(days=1))
+def fetch(dataset_url: str) -> pd.DataFrame:
+    """Read data from web into pandas DataFrame"""
+
+    df = pd.read_csv(dataset_url)
+    return df
+
+@task(log_prints=True, retries=3)
+def clean(df=pd.DataFrame) -> pd.DataFrame:
+    """Fix dtype issues"""
+    df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
+    df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'])
+    print(df.head(2))
+    print(f"columns: {df.dtypes}")
+    print(f"rows: {len(df)}")
+    return df
+
+@task(log_prints=True, retries=3)
+def write_local(df: pd.DataFrame, color: str, dataset_file: str) -> Path:
+    """Wirte DataFrame out locally as parquet file"""
+    path = Path(f"data/{color}/{dataset_file}.parquet")
+    df.to_parquet(path, compression='gzip')
+    return path
+
+@task(log_prints=True, retries=3)
+def write_gcs(path: Path) -> None:
+    """Upload local parquet file to GCS"""
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.upload_from_path(from_path=path, to_path=path)
+    return
+
+
+@flow()
+def etl_web_to_gcs(year: int, month: int, color: str) -> None:
+    """The main ETL function"""
+    dataset_file = f"{color}_tripdata_{year}-{month:02}"
+    dataset_url = f"https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{color}/{dataset_file}.csv.gz"
+
+    df = fetch(dataset_url)
+    df_clean = clean(df)
+    path = write_local(df_clean, color, dataset_file)
+    write_gcs(path)
+
+@flow()
+def etl_parent_flow(
+        months: list[int] = [1, 2], year: int = 2021, color: str = "yellow"
+):
+    for month in months:
+        etl_web_to_gcs(year, month, color)
+
+
+if __name__ == '__main__':
+    color = "yellow"
+    months = [1,2,3]
+    year = 2021
+    etl_parent_flow(months, year, color)
+```
+
+### Parameter validation with Pydantic
+
+There are many ways to create a deployment, but I will use
+[CLI](https://docs.prefect.io/concepts/deployments/#create-a-deployment-on-the-cli)  
+
+See [Deployments overview](https://docs.prefect.io/concepts/deployments/#deployments-overview) for more information.  
+
+Make sure Prefect Orion is running. If not, then run these commands.
+```bash
+$ prefect orion start
+```
+Check out the dashboard at <http://127.0.0.1:4200>.
+
+### Creating a deployment locally  
+
+Open a new terminal window and execute this command to create a deployment file.  
+
+```text
+$ prefect deployment build ./flows/01_start/parameterized_flow.py:etl_parent_flow -n "Parameterized ETL"
+```
+
+A deployment model `etl_parent_flow-deployment.yaml` is created.  
+
+### Running the flow  
+
+``` bash
+prefect deployment apply etl_parent_flow-deployment.yaml
+```
+
+![img_6.png](imgs%2Fimg_6.png)  
+
+Go to the Orion UI. We should see the deployment model is there.  
+
+|                                |                                |
+|--------------------------------|--------------------------------|
+| ![img_7.png](imgs%2Fimg_7.png) | ![img_8.png](imgs%2Fimg_8.png) |
+
+Click on **Quick run** button.
+
+Select **Flow Runs** in the left menu. Orion UI should indicate that our run is in **Scheduled** state. In my case, I
+see **Late** state.
+
+The **Scheduled** state indicates that our flow a ready to be run but we have no agent picking of this run.
+
+Select **Work Queues** in the left menu.
+
+A agent is a very lightly python process that is living in my executing environment.  
+
+![img_9.png](imgs%2Fimg_9.png)  
+
+### Setting up Prefect Agent  
+
+Now start the agent.
+
+``` bash
+prefect agent start --work-queue "default"
+```
+
+We see this below in the terminal window.
+
+```text
+(venv) (base) sang@sang-desktop:~/Desktop/Learning/DE/DTC/week_2$ prefect agent start --work-queue "default"
+Starting v2.7.7 agent with ephemeral API...
+
+  ___ ___ ___ ___ ___ ___ _____     _   ___ ___ _  _ _____
+ | _ \ _ \ __| __| __/ __|_   _|   /_\ / __| __| \| |_   _|
+ |  _/   / _|| _|| _| (__  | |    / _ \ (_ | _|| .` | | |
+ |_| |_|_\___|_| |___\___| |_|   /_/ \_\___|___|_|\_| |_|
+
+
+Agent started! Looking for work from queue(s): default...
+10:47:40.156 | INFO    | prefect.agent - Submitting flow run 'c9b81613-01e9-4f0c-be54-6e8912a6542c'
+10:47:40.232 | INFO    | prefect.infrastructure.process - Opening process 'meteoric-caribou'...
+10:47:40.249 | INFO    | prefect.agent - Completed submission of flow run 'c9b81613-01e9-4f0c-be54-6e8912a6542c'
+<frozen runpy>:128: RuntimeWarning: 'prefect.engine' found in sys.modules after import of package 'prefect', but prior to execution of 'prefect.engine'; this may result in unpredictable behaviour
+10:47:41.907 | INFO    | Flow run 'meteoric-caribou' - Downloading flow code from storage at '/home/sang/Desktop/Learning/DE/DTC/week_2'
+10:47:43.826 | INFO    | Flow run 'meteoric-caribou' - Created subflow run 'mottled-mayfly' for flow 'etl-web-to-gcs'
+10:47:43.890 | INFO    | Flow run 'mottled-mayfly' - Created task run 'fetch-ba00c645-0' for task 'fetch'
+10:47:43.891 | INFO    | Flow run 'mottled-mayfly' - Executing 'fetch-ba00c645-0' immediately...
+10:47:43.917 | INFO    | Task run 'fetch-ba00c645-0' - Finished in state Cached(type=COMPLETED)
+10:47:45.502 | INFO    | Flow run 'mottled-mayfly' - Created task run 'clean-2c6af9f6-0' for task 'clean'
+10:47:45.502 | INFO    | Flow run 'mottled-mayfly' - Executing 'clean-2c6af9f6-0' immediately...
+10:47:45.913 | INFO    | Task run 'clean-2c6af9f6-0' -    VendorID tpep_pickup_datetime  ... total_amount  congestion_surcharge
+0       1.0  2021-01-01 00:30:10  ...         11.8                   2.5
+1       1.0  2021-01-01 00:51:20  ...          4.3                   0.0
+
+[2 rows x 18 columns]
+10:47:45.914 | INFO    | Task run 'clean-2c6af9f6-0' - columns: VendorID                        float64
+tpep_pickup_datetime     datetime64[ns]
+tpep_dropoff_datetime    datetime64[ns]
+passenger_count                 float64
+trip_distance                   float64
+RatecodeID                      float64
+store_and_fwd_flag               object
+PULocationID                      int64
+DOLocationID                      int64
+payment_type                    float64
+fare_amount                     float64
+extra                           float64
+mta_tax                         float64
+tip_amount                      float64
+tolls_amount                    float64
+improvement_surcharge           float64
+total_amount                    float64
+congestion_surcharge            float64
+dtype: object
+10:47:45.914 | INFO    | Task run 'clean-2c6af9f6-0' - rows: 1369765
+10:47:45.939 | INFO    | Task run 'clean-2c6af9f6-0' - Finished in state Completed()
+10:47:45.957 | INFO    | Flow run 'mottled-mayfly' - Created task run 'write_local-09e9d2b8-0' for task 'write_local'
+10:47:45.957 | INFO    | Flow run 'mottled-mayfly' - Executing 'write_local-09e9d2b8-0' immediately...
+10:47:48.962 | INFO    | Task run 'write_local-09e9d2b8-0' - Finished in state Completed()
+10:47:48.984 | INFO    | Flow run 'mottled-mayfly' - Created task run 'write_gcs-67f8f48e-0' for task 'write_gcs'
+10:47:48.985 | INFO    | Flow run 'mottled-mayfly' - Executing 'write_gcs-67f8f48e-0' immediately...
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:47:49.601 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:47:49.602 | INFO    | Task run 'write_gcs-67f8f48e-0' - Getting bucket 'dtc_data_lake_dtc-392100'.
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:47:50.104 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:47:52.208 | INFO    | Task run 'write_gcs-67f8f48e-0' - Uploading from PosixPath('data/yellow/yellow_tripdata_2021-01.parquet') to the bucket 'dtc_data_lake_dtc-392100' path 'data/yellow/yellow_tripdata_2021-01.parquet'.
+10:47:58.749 | INFO    | Task run 'write_gcs-67f8f48e-0' - Finished in state Completed()
+10:47:58.781 | INFO    | Flow run 'mottled-mayfly' - Finished in state Completed('All states completed.')
+10:47:58.853 | INFO    | Flow run 'meteoric-caribou' - Created subflow run 'tough-mongrel' for flow 'etl-web-to-gcs'
+10:47:58.919 | INFO    | Flow run 'tough-mongrel' - Created task run 'fetch-ba00c645-0' for task 'fetch'
+10:47:58.920 | INFO    | Flow run 'tough-mongrel' - Executing 'fetch-ba00c645-0' immediately...
+10:47:58.945 | INFO    | Task run 'fetch-ba00c645-0' - Finished in state Cached(type=COMPLETED)
+10:48:00.536 | INFO    | Flow run 'tough-mongrel' - Created task run 'clean-2c6af9f6-0' for task 'clean'
+10:48:00.537 | INFO    | Flow run 'tough-mongrel' - Executing 'clean-2c6af9f6-0' immediately...
+10:48:00.947 | INFO    | Task run 'clean-2c6af9f6-0' -    VendorID tpep_pickup_datetime  ... total_amount  congestion_surcharge
+0       1.0  2021-02-01 00:40:47  ...         12.3                   2.5
+1       1.0  2021-02-01 00:07:44  ...         13.3                   0.0
+
+[2 rows x 18 columns]
+10:48:00.948 | INFO    | Task run 'clean-2c6af9f6-0' - columns: VendorID                        float64
+tpep_pickup_datetime     datetime64[ns]
+tpep_dropoff_datetime    datetime64[ns]
+passenger_count                 float64
+trip_distance                   float64
+RatecodeID                      float64
+store_and_fwd_flag               object
+PULocationID                      int64
+DOLocationID                      int64
+payment_type                    float64
+fare_amount                     float64
+extra                           float64
+mta_tax                         float64
+tip_amount                      float64
+tolls_amount                    float64
+improvement_surcharge           float64
+total_amount                    float64
+congestion_surcharge            float64
+dtype: object
+10:48:00.949 | INFO    | Task run 'clean-2c6af9f6-0' - rows: 1371708
+10:48:00.970 | INFO    | Task run 'clean-2c6af9f6-0' - Finished in state Completed()
+10:48:01.001 | INFO    | Flow run 'tough-mongrel' - Created task run 'write_local-09e9d2b8-0' for task 'write_local'
+10:48:01.001 | INFO    | Flow run 'tough-mongrel' - Executing 'write_local-09e9d2b8-0' immediately...
+10:48:04.001 | INFO    | Task run 'write_local-09e9d2b8-0' - Finished in state Completed()
+10:48:04.026 | INFO    | Flow run 'tough-mongrel' - Created task run 'write_gcs-67f8f48e-0' for task 'write_gcs'
+10:48:04.027 | INFO    | Flow run 'tough-mongrel' - Executing 'write_gcs-67f8f48e-0' immediately...
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:48:04.584 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:48:04.585 | INFO    | Task run 'write_gcs-67f8f48e-0' - Getting bucket 'dtc_data_lake_dtc-392100'.
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:48:05.090 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:48:07.157 | INFO    | Task run 'write_gcs-67f8f48e-0' - Uploading from PosixPath('data/yellow/yellow_tripdata_2021-02.parquet') to the bucket 'dtc_data_lake_dtc-392100' path 'data/yellow/yellow_tripdata_2021-02.parquet'.
+10:48:13.930 | INFO    | Task run 'write_gcs-67f8f48e-0' - Finished in state Completed()
+10:48:13.960 | INFO    | Flow run 'tough-mongrel' - Finished in state Completed('All states completed.')
+10:48:14.020 | INFO    | Flow run 'meteoric-caribou' - Created subflow run 'gabby-hog' for flow 'etl-web-to-gcs'
+10:48:14.094 | INFO    | Flow run 'gabby-hog' - Created task run 'fetch-ba00c645-0' for task 'fetch'
+10:48:14.094 | INFO    | Flow run 'gabby-hog' - Executing 'fetch-ba00c645-0' immediately...
+10:48:14.123 | INFO    | Task run 'fetch-ba00c645-0' - Finished in state Cached(type=COMPLETED)
+10:48:16.275 | INFO    | Flow run 'gabby-hog' - Created task run 'clean-2c6af9f6-0' for task 'clean'
+10:48:16.276 | INFO    | Flow run 'gabby-hog' - Executing 'clean-2c6af9f6-0' immediately...
+10:48:16.824 | INFO    | Task run 'clean-2c6af9f6-0' -    VendorID tpep_pickup_datetime  ... total_amount  congestion_surcharge
+0       2.0  2021-03-01 00:22:02  ...          4.3                   0.0
+1       2.0  2021-03-01 00:24:48  ...          3.8                   0.0
+
+[2 rows x 18 columns]
+10:48:16.825 | INFO    | Task run 'clean-2c6af9f6-0' - columns: VendorID                        float64
+tpep_pickup_datetime     datetime64[ns]
+tpep_dropoff_datetime    datetime64[ns]
+passenger_count                 float64
+trip_distance                   float64
+RatecodeID                      float64
+store_and_fwd_flag               object
+PULocationID                      int64
+DOLocationID                      int64
+payment_type                    float64
+fare_amount                     float64
+extra                           float64
+mta_tax                         float64
+tip_amount                      float64
+tolls_amount                    float64
+improvement_surcharge           float64
+total_amount                    float64
+congestion_surcharge            float64
+dtype: object
+10:48:16.825 | INFO    | Task run 'clean-2c6af9f6-0' - rows: 1925152
+10:48:16.847 | INFO    | Task run 'clean-2c6af9f6-0' - Finished in state Completed()
+10:48:16.869 | INFO    | Flow run 'gabby-hog' - Created task run 'write_local-09e9d2b8-0' for task 'write_local'
+10:48:16.870 | INFO    | Flow run 'gabby-hog' - Executing 'write_local-09e9d2b8-0' immediately...
+10:48:20.743 | INFO    | Task run 'write_local-09e9d2b8-0' - Finished in state Completed()
+10:48:20.765 | INFO    | Flow run 'gabby-hog' - Created task run 'write_gcs-67f8f48e-0' for task 'write_gcs'
+10:48:20.765 | INFO    | Flow run 'gabby-hog' - Executing 'write_gcs-67f8f48e-0' immediately...
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:48:21.345 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:48:21.345 | INFO    | Task run 'write_gcs-67f8f48e-0' - Getting bucket 'dtc_data_lake_dtc-392100'.
+/home/sang/Desktop/Learning/DE/DTC/week_2/venv/lib/python3.11/site-packages/google/auth/_default.py:78: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+10:48:21.830 | WARNING | google.auth._default - No project ID could be determined. Consider running `gcloud config set project` or setting the GOOGLE_CLOUD_PROJECT environment variable
+10:48:22.512 | INFO    | Task run 'write_gcs-67f8f48e-0' - Uploading from PosixPath('data/yellow/yellow_tripdata_2021-03.parquet') to the bucket 'dtc_data_lake_dtc-392100' path 'data/yellow/yellow_tripdata_2021-03.parquet'.
+10:48:29.197 | INFO    | Task run 'write_gcs-67f8f48e-0' - Finished in state Completed()
+10:48:29.228 | INFO    | Flow run 'gabby-hog' - Finished in state Completed('All states completed.')
+10:48:29.256 | INFO    | Flow run 'meteoric-caribou' - Finished in state Completed('All states completed.')
+10:48:30.066 | INFO    | prefect.infrastructure.process - Process 'meteoric-caribou' exited cleanly.
+```
+And in the Orion UI, we see that the run is completed.  
+
+![img_10.png](imgs%2Fimg_10.png)
+
+### Notifications
+
+We can setup a notification.
+
+Go to the Orion UI, select **Notifications** and create a notification.  
+
+![img_11.png](imgs%2Fimg_11.png)  
+
+Quit the terminal window with `Ctrl+C`.
+
+We should also delete the file created in the bucket.  
+
+![img_12.png](imgs%2Fimg_12.png)
+
+
